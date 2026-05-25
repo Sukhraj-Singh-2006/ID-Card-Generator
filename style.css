@@ -1,0 +1,50 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  background: #ffffff;
+}
+
+.page {
+  display: grid;
+  place-items: center;
+}
+
+.id-card {
+  width: min(1600px, 100vw);
+  aspect-ratio: 1600 / 1011;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.id-card__image {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+@media print {
+  @page {
+    size: 1600px 1011px;
+    margin: 0;
+  }
+
+  body,
+  .page {
+    margin: 0;
+    padding: 0;
+    background: #ffffff;
+  }
+
+  .id-card {
+    width: 1600px;
+    height: 1011px;
+  }
+}
