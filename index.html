@@ -197,7 +197,7 @@
 
     .stats {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(3, 1fr);
       gap: 10px;
       margin-top: 18px;
     }
@@ -588,6 +588,26 @@
       z-index: 4;
     }
 
+    .id-card .signature-image {
+      position: absolute;
+      left: 55px;
+      top: 474px;
+      width: 210px;
+      height: 45px;
+      z-index: 5;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      pointer-events: none;
+    }
+
+    .id-card .signature-image img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+
     .id-card .issued {
       position: absolute;
       left: 658px;
@@ -707,6 +727,19 @@
         </p>
       </div>
 
+      <div class="panel">
+        <h2>Upload Signature Folder</h2>
+        <label class="file-box">
+          Choose Signatures
+          <small>Select files or a folder</small>
+          <span id="signatureFolderName" class="selected-file">No signatures selected</span>
+          <input id="signatureInput" type="file" accept="image/*" multiple webkitdirectory directory />
+        </label>
+        <p class="hint">
+          Use a Signature column, intern ID, or intern name in the signature file name.
+        </p>
+      </div>
+
       <div class="actions">
         <button id="generateBtn" class="btn primary" disabled>Generate ID Cards</button>
         <button id="downloadZipBtn" class="btn" disabled>Download All as ZIP</button>
@@ -721,6 +754,10 @@
           <strong id="photoCount">0</strong>
           <span>Photos</span>
         </div>
+        <div class="stat">
+          <strong id="signatureCount">0</strong>
+          <span>Signs</span>
+        </div>
       </div>
     </aside>
 
@@ -733,7 +770,7 @@
         <input id="searchInput" class="search" type="search" placeholder="Search by name or ID" />
       </div>
 
-      <div id="status" class="status">Waiting for Excel sheet and photos.</div>
+      <div id="status" class="status">Waiting for Excel sheet, photos, and signatures.</div>
       <div id="cardsGrid" class="cards-grid">
         <div class="empty">
           <div>
@@ -751,22 +788,26 @@
     const state = {
       rows: [],
       photos: new Map(),
+      signatures: new Map(),
       cards: [],
       filteredCards: []
     };
 
     const excelInput = document.getElementById("excelInput");
     const photoInput = document.getElementById("photoInput");
+    const signatureInput = document.getElementById("signatureInput");
     const generateBtn = document.getElementById("generateBtn");
     const downloadZipBtn = document.getElementById("downloadZipBtn");
     const cardsGrid = document.getElementById("cardsGrid");
     const statusEl = document.getElementById("status");
     const studentCount = document.getElementById("studentCount");
     const photoCount = document.getElementById("photoCount");
+    const signatureCount = document.getElementById("signatureCount");
     const searchInput = document.getElementById("searchInput");
     const captureStage = document.getElementById("captureStage");
     const excelFileName = document.getElementById("excelFileName");
     const photoFolderName = document.getElementById("photoFolderName");
+    const signatureFolderName = document.getElementById("signatureFolderName");
 
     const fieldAliases = {
       id: ["id", "id number", "intern id", "student id", "roll no", "roll number", "registration no"],
@@ -777,11 +818,13 @@
       issueDate: ["date of issue", "issue date", "issued date"],
       validUpto: ["valid upto", "valid up to", "valid till", "validity"],
       contact: ["contact no", "contact no.", "phone", "mobile", "mobile no", "contact"],
-      address: ["address", "residence", "location"]
+      address: ["address", "residence", "location"],
+      signature: ["signature", "sign", "signature file", "signature name", "sign file"]
     };
 
     excelInput.addEventListener("change", handleExcel);
     photoInput.addEventListener("change", handlePhotos);
+    signatureInput.addEventListener("change", handleSignatures);
     generateBtn.addEventListener("click", generateCards);
     downloadZipBtn.addEventListener("click", downloadAllZip);
     searchInput.addEventListener("input", filterCards);
@@ -867,7 +910,8 @@
         issueDate: formatDate(getByAliases(row, fieldAliases.issueDate)),
         validUpto: formatDate(getByAliases(row, fieldAliases.validUpto)),
         contact: cleanValue(getByAliases(row, fieldAliases.contact)),
-        address: cleanAddress(getByAliases(row, fieldAliases.address))
+        address: cleanAddress(getByAliases(row, fieldAliases.address)),
+        signatureKey: cleanValue(getByAliases(row, fieldAliases.signature))
       };
 
       if (!intern.name) intern.name = `Intern ${index + 1}`;
@@ -931,6 +975,36 @@
       setStatus(`${photoCount.textContent} photos loaded.`);
     }
 
+    async function handleSignatures(event) {
+      state.signatures.clear();
+      const files = Array.from(event.target.files || []);
+      const imageFiles = files.filter(file => file.type.startsWith("image/"));
+      const firstPath = imageFiles[0]?.webkitRelativePath || "";
+      const folder = firstPath.includes("/") ? firstPath.split("/")[0] : "";
+
+      signatureFolderName.textContent = folder
+        ? `${folder} (${imageFiles.length} signatures)`
+        : `${imageFiles.length} signature${imageFiles.length === 1 ? "" : "s"} selected`;
+
+      signatureCount.textContent = imageFiles.length;
+      setStatus(`Processing ${imageFiles.length} signature${imageFiles.length === 1 ? "" : "s"}...`);
+
+      for (const file of imageFiles) {
+        const processedUrl = await prepareSignature(file);
+        const baseName = file.name.replace(/\.[^.]+$/, "");
+        const keys = new Set([
+          normalizeKey(baseName),
+          normalizeKey(file.webkitRelativePath || file.name)
+        ]);
+
+        keys.forEach(key => {
+          if (key) state.signatures.set(key, { file, url: processedUrl });
+        });
+      }
+
+      setStatus(`${signatureCount.textContent} signatures loaded and cleaned.`);
+    }
+
     function updateGenerateState() {
       generateBtn.disabled = state.rows.length === 0;
     }
@@ -956,10 +1030,35 @@
       return "";
     }
 
+    function findSignature(intern) {
+      const candidates = [
+        intern.signatureKey,
+        intern.id,
+        intern.name,
+        `${intern.id} ${intern.name}`,
+        `${intern.name} ${intern.id}`,
+        `${intern.name} signature`,
+        `${intern.id} signature`
+      ].map(normalizeKey).filter(Boolean);
+
+      for (const key of candidates) {
+        if (state.signatures.has(key)) return state.signatures.get(key).url;
+      }
+
+      for (const [key, signature] of state.signatures.entries()) {
+        if (candidates.some(candidate => key.includes(candidate) || candidate.includes(key))) {
+          return signature.url;
+        }
+      }
+
+      return "";
+    }
+
     function generateCards() {
       state.cards = state.rows.map((intern, index) => ({
         ...intern,
         photo: findPhoto(intern),
+        signature: findSignature(intern),
         fileName: makeFileName(intern, index)
       }));
 
@@ -1077,6 +1176,7 @@
           </div>
 
           <div class="intern-tab"><span>INTERN</span></div>
+          ${intern.signature ? `<div class="signature-image"><img src="${intern.signature}" alt="" /></div>` : ""}
           <div class="signature">Holder's Signature</div>
           <div class="issued"><strong>Issued by:</strong> Centre of Excellence - SEnSRS, IIT Ropar</div>
 
@@ -1085,6 +1185,113 @@
           </div>
         </section>
       `;
+    }
+
+    async function prepareSignature(file) {
+      const url = URL.createObjectURL(file);
+      let revokeUrl = true;
+
+      try {
+        const img = await loadImage(url);
+        const maxSide = 1200;
+        const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+        const width = Math.max(1, Math.round(img.naturalWidth * scale));
+        const height = Math.max(1, Math.round(img.naturalHeight * scale));
+
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        ctx.drawImage(img, 0, 0, width, height);
+
+        const image = ctx.getImageData(0, 0, width, height);
+        const data = image.data;
+        const bg = estimateBackground(data, width, height);
+        let minX = width;
+        let minY = height;
+        let maxX = -1;
+        let maxY = -1;
+
+        for (let y = 0; y < height; y += 1) {
+          for (let x = 0; x < width; x += 1) {
+            const index = (y * width + x) * 4;
+            const r = data[index];
+            const g = data[index + 1];
+            const b = data[index + 2];
+            const a = data[index + 3];
+            const distance = Math.hypot(r - bg.r, g - bg.g, b - bg.b);
+            const nearWhite = r > 230 && g > 230 && b > 230;
+            const nearPaper = distance < 54 || nearWhite;
+
+            if (a < 12 || nearPaper) {
+              data[index + 3] = 0;
+            } else {
+              data[index + 3] = Math.min(255, Math.max(70, Math.round((distance - 35) * 5)));
+              minX = Math.min(minX, x);
+              minY = Math.min(minY, y);
+              maxX = Math.max(maxX, x);
+              maxY = Math.max(maxY, y);
+            }
+          }
+        }
+
+        if (maxX < minX || maxY < minY) {
+          return canvas.toDataURL("image/png");
+        }
+
+        ctx.putImageData(image, 0, 0);
+        const pad = 10;
+        minX = Math.max(0, minX - pad);
+        minY = Math.max(0, minY - pad);
+        maxX = Math.min(width - 1, maxX + pad);
+        maxY = Math.min(height - 1, maxY + pad);
+
+        const cropWidth = maxX - minX + 1;
+        const cropHeight = maxY - minY + 1;
+        const cropped = document.createElement("canvas");
+        cropped.width = cropWidth;
+        cropped.height = cropHeight;
+        cropped.getContext("2d").drawImage(canvas, minX, minY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+
+        return cropped.toDataURL("image/png");
+      } catch (error) {
+        console.warn("Signature cleanup failed", error);
+        revokeUrl = false;
+        return url;
+      } finally {
+        if (revokeUrl) setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+    }
+
+    function loadImage(url) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+        img.src = url;
+      });
+    }
+
+    function estimateBackground(data, width, height) {
+      const points = [
+        [0, 0],
+        [width - 1, 0],
+        [0, height - 1],
+        [width - 1, height - 1],
+        [Math.floor(width / 2), 0],
+        [Math.floor(width / 2), height - 1]
+      ];
+
+      const colors = points.map(([x, y]) => {
+        const index = (y * width + x) * 4;
+        return { r: data[index], g: data[index + 1], b: data[index + 2] };
+      });
+
+      return {
+        r: Math.round(colors.reduce((sum, color) => sum + color.r, 0) / colors.length),
+        g: Math.round(colors.reduce((sum, color) => sum + color.g, 0) / colors.length),
+        b: Math.round(colors.reduce((sum, color) => sum + color.b, 0) / colors.length)
+      };
     }
 
     function fieldRow(label, value) {
